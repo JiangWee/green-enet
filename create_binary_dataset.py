@@ -33,14 +33,14 @@ def create_binary_green_labels(root_dir, dataset_type, output_dir, split='all'):
         os.makedirs(img_output_dir, exist_ok=True)
         os.makedirs(label_output_dir, exist_ok=True)
     
-    # 根据数据集类型创建数据集实例
+# 根据数据集类型创建数据集实例
     if dataset_type.lower() == 'camvid':
         DatasetClass = CamVid
-        # CamVid中的植被类别：'tree'
-        green_class_index = 6  # 根据color_encoding顺序，tree是第6个（从0开始）
+        # 修正：CamVid中树木的索引是6，交通灯是7
+        green_class_index = 5  # 'tree'类别
     elif dataset_type.lower() == 'cityscapes':
         DatasetClass = Cityscapes
-        # Cityscapes中的植被类别：'vegetation'（在new_classes中索引为9）
+        # Cityscapes中的植被类别：'vegetation'（索引为9）
         green_class_index = 9
     else:
         raise ValueError(f"不支持的dataset_type: {dataset_type}")
@@ -82,9 +82,9 @@ def create_binary_green_labels(root_dir, dataset_type, output_dir, split='all'):
                     # 加载原始图像和标签
                     image, label = pil_loader(image_path, label_path)
                     
-                    # 对Cityscapes数据集进行类别重映射
-                    if dataset_type.lower() == 'cityscapes':
-                        label = remap(label, dataset.full_classes, dataset.new_classes)
+                    # 调试：打印标签信息
+                    print(f"标签路径: {label_path}")
+                    print(f"标签模式: {label.mode}")
                     
                     # 将标签转换为numpy数组
                     if isinstance(label, Image.Image):
@@ -92,20 +92,31 @@ def create_binary_green_labels(root_dir, dataset_type, output_dir, split='all'):
                     else:
                         label_array = label
                     
+                    print(f"标签数组形状: {label_array.shape}")
+                    print(f"标签唯一值: {np.unique(label_array)}")
+                    
                     # 创建二分类标签：绿植=1，非绿植=0
                     binary_label = np.zeros_like(label_array)
                     
+                    # 简化处理：直接使用索引比较
                     if dataset_type.lower() == 'camvid':
-                        # CamVid可能是RGB标签或索引标签
-                        if len(label_array.shape) == 3:  # RGB格式
-                            tree_color = np.array([128, 128, 0])  # tree的RGB颜色
-                            green_mask = np.all(label_array == tree_color, axis=-1)
-                        else:  # 索引格式
-                            green_mask = (label_array == green_class_index)
+                        # ENet的CamVid标签应该是单通道索引格式
+                        if len(label_array.shape) == 3:  # 如果是RGB格式
+                            print("警告: CamVid标签是RGB格式，应该是索引格式")
+                            # 尝试转换为灰度图，取第一个通道作为索引
+                            if label_array.shape[2] == 3:
+                                label_array = label_array[:,:,0]  # 取R通道
+                        
+                        # 直接使用索引比较
+                        green_mask = (label_array == green_class_index)
+                        
                     else:  # Cityscapes
+                        # Cityscapes已经通过remap处理，直接使用索引
                         green_mask = (label_array == green_class_index)
                     
                     binary_label[green_mask] = 1
+                    
+                    print(f"绿植像素数量: {np.sum(green_mask)}")
                     
                     # 保存二分类标签图像（单通道PNG）
                     binary_label_img = Image.fromarray(binary_label.astype(np.uint8))
@@ -113,31 +124,32 @@ def create_binary_green_labels(root_dir, dataset_type, output_dir, split='all'):
                     binary_label_path = os.path.join(label_output_dir, label_filename)
                     binary_label_img.save(binary_label_path)
                     
-                    # 复制原始图像到输出目录（保持图像不变）
+                    # 复制原始图像到输出目录
                     image_filename = os.path.basename(image_path)
                     output_image_path = os.path.join(img_output_dir, image_filename)
                     
-                    # 如果是Cityscapes，图像可能是16位，需要转换
                     if image.mode != 'RGB':
                         image = image.convert('RGB')
                     image.save(output_image_path)
                     
                     processed_count += 1
                     
-                    if processed_count % 100 == 0:
+                    if processed_count % 10 == 0:  # 每10张打印一次，便于调试
                         print(f"已处理 {processed_count} 张图像")
                         
                 except Exception as e:
                     print(f"处理第 {i} 个样本时出错: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
                     continue
                     
         except Exception as e:
             print(f"创建 {current_split} 数据集时出错: {str(e)}")
+            import traceback
+            traceback.print_exc()
             continue
     
     print(f"处理完成! 共转换 {processed_count} 张图像的标签")
-    print(f"二分类数据集已保存到: {output_dir}")
-    print(f"标签格式: 绿植=1, 非绿植=0")
 
 def create_dataset_info_file(output_dir, dataset_type):
     """创建数据集信息文件"""
