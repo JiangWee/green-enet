@@ -25,16 +25,14 @@ def train_green_ratio():
     learning_rate = 0.001
     num_epochs = 100
     
-    # 修改图像和标签的transform
     image_transform = transforms.Compose([
-        transforms.Resize((512, 512)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        transforms.Resize((360, 480)),
+        transforms.ToTensor()  # 没有归一化
     ])
 
     # 标签transform - 确保与模型输出尺寸匹配
     label_transform = transforms.Compose([
-        transforms.Resize((512, 512), interpolation=transforms.InterpolationMode.NEAREST),
+        transforms.Resize((360, 480), interpolation=transforms.InterpolationMode.NEAREST),
         transforms.Lambda(lambda x: torch.from_numpy(np.array(x)).long())
     ])
     

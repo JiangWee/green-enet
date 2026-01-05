@@ -16,6 +16,19 @@ plt.rcParams['axes.unicode_minus'] = False    # 用来正常显示负号
 sys.path.append('models')  # 假设ENet模型在models目录下
 from enet import ENet  # 从文档2中导入ENet模型
 
+def denormalize(tensor):
+    """
+    将张量准备为适合可视化的格式
+    由于您的预处理只是ToTensor()，我们只需要确保张量格式正确
+    """
+    # 确保是3维张量 [C, H, W]
+    if tensor.dim() == 4:
+        tensor = tensor.squeeze(0)
+    
+    # 由于预处理只是ToTensor()，值已经在[0,1]范围内
+    # 我们直接返回张量，保持后续处理的灵活性
+    return tensor
+
 def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path, enet_model_path, output_dir):
     """
     在指定数据集上验证完整模型、编码器模型和预训练ENet模型
@@ -48,7 +61,6 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
     encoder_model.eval()
     
     # 加载预训练ENet模型
-    # 根据CamVid数据集，ENet有11个类别（忽略unlabeled）
     num_classes_enet = 12
     enet_model = ENet(num_classes_enet).to(device)
     
@@ -65,30 +77,19 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
     print(f"ENet模型参数数量: {sum(p.numel() for p in enet_model.parameters())}")
     
     # 图像预处理
-    transform_enet = transforms.Compose([
-        transforms.Resize((360, 480)),  # 高360, 宽480 (与文档2一致)
+    transform = transforms.Compose([
+        transforms.Resize((360, 480)),
         transforms.ToTensor(),
-        # 注意：ENet模型应该使用简单的[0,1]归一化，而不是ImageNet标准化
     ])
     
-    transform_full_enc = transforms.Compose([
-        transforms.Resize((512, 512)),  # 保持你原来的尺寸
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
-    ])
-    
-    # 反归一化转换
-    inv_normalize = transforms.Normalize(
-        mean=[-0.485/0.229, -0.456/0.224, -0.406/0.225],
-        std=[1/0.229, 1/0.224, 1/0.225]
-    )
-    
+    # 修改反归一化定义
+    inv_normalize = lambda x: x  # 直接使用恒等映射，因为预处理只是ToTensor()
+
     # 创建数据集
     class CustomDataset(Dataset):
-        def __init__(self, dataset_path, transform_full=None, transform_enet=None):
+        def __init__(self, dataset_path, transform=None):
             self.dataset_path = dataset_path
-            self.transform_full = transform_full
-            self.transform_enet = transform_enet
+            self.transform = transform
             self.image_files = []
             
             # 查找所有bmp文件
@@ -109,19 +110,15 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
             image = Image.open(img_path).convert('RGB')
             original_size = image.size  # (width, height)
             
-            if self.transform_full:
-                image_full = self.transform_full(image)
+            if self.transform:
+                image_full = self.transform(image)
             else:
                 image_full = transforms.ToTensor()(image)
-                
-            if self.transform_enet:
-                image_enet = self.transform_enet(image)
-            else:
-                image_enet = transforms.ToTensor()(image)
+
             
             return {
                 'image_full': image_full,
-                'image_enet': image_enet,
+                'image_enet': image_full,
                 'name': img_name,
                 'size': original_size  # 保持为元组 (width, height)
             }
@@ -136,7 +133,7 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
         return images_full, images_enet, names, sizes
     
     # 创建数据集和数据加载器
-    dataset = CustomDataset(dataset_path, transform_full_enc, transform_enet)
+    dataset = CustomDataset(dataset_path, transform)
     dataloader = DataLoader(dataset, batch_size=1, shuffle=False, collate_fn=custom_collate_fn)
     
     # 存储结果
@@ -147,7 +144,6 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
         'sky': (128, 128, 128),
         'building': (128, 0, 0),
         'pole': (192, 192, 128),
-        'road_marking': (255, 69, 0),
         'road': (128, 64, 128),
         'pavement': (60, 40, 222),
         'tree': (128, 128, 0),  # 绿植类别
@@ -155,8 +151,7 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
         'fence': (64, 64, 128),
         'car': (64, 0, 128),
         'pedestrian': (64, 64, 0),
-        'bicyclist': (0, 128, 192),
-        'unlabeled': (0, 0, 0)
+        'bicyclist': (0, 128, 192)
     }
 
     # 绿植类别索引（在CamVid中是'tree'，索引为5）
@@ -177,11 +172,20 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
             # 完整模型推理（使用Full预处理）
             segmentation_full, feature_map_full, green_prob_map_full, green_ratio_full = full_model(
                 images_full, return_features=True)
-            
+                        
+            # 完整模型输出形状检查
+            print(f"分割输出形状: {segmentation_full.shape}")  # 应该显示类似 torch.Size([1, 2, 360, 480])
+            print(f"特征图形状: {feature_map_full.shape}")
+            print(f"绿植概率图形状: {green_prob_map_full.shape}")
+
             # 编码器模型推理（使用Full预处理）
             feature_map_enc, green_prob_map_enc, green_ratio_enc = encoder_model(
                 images_full, return_features=True)
-            
+
+            # 编码器模型输出形状检查
+            print(f"特征图形状: {feature_map_enc.shape}")
+            print(f"绿植概率图形状: {green_prob_map_enc.shape}")
+
             # ENet模型推理
             # 注意：ENet模型应该使用[0,1]范围的输入
             enet_input = images_enet  # 已经是[0,1]范围
@@ -250,24 +254,40 @@ def validate_models_on_dataset(dataset_path, full_model_path, encoder_model_path
 
 def create_visualization(image_tensor, segmentation, ratio, seg_ratio, img_name, output_dir, model_type, original_size, inv_normalize):
     """为完整模型创建可视化结果"""
-    # 反归一化图像
-    img_denorm = inv_normalize(image_tensor).clamp(0, 1)
+    # 统一输入处理
+    if image_tensor.dim() == 4:
+        image_tensor = image_tensor.squeeze(0)
+    
+    # 反归一化
+    img_denorm = inv_normalize(image_tensor)
+    
+    # 确保是PyTorch张量
+    if not isinstance(img_denorm, torch.Tensor):
+        img_denorm = torch.from_numpy(img_denorm)
+    
+    # 确保值范围正确 [0,1]
+    if img_denorm.max() > 1.0:
+        img_denorm = img_denorm / 255.0
+
+    # 修复：正确处理分割结果的维度
+    if segmentation.dim() == 4:
+        segmentation = segmentation.squeeze(0)  # [C, H, W]
     
     # 获取预测的分割结果
-    pred_mask = torch.argmax(segmentation, dim=0)  # [H, W]
+    pred_mask = torch.argmax(segmentation, dim=0).cpu().numpy().astype(np.uint8)  # [H, W]
     
-    # 将图像和分割结果调整回原始尺寸
+    # 上采样到原始尺寸
     img_original = F.interpolate(
-        img_denorm.unsqueeze(0), 
+        img_denorm.unsqueeze(0),  # [1, C, H, W]
         size=(original_size[1], original_size[0]),
         mode='bilinear'
-    ).squeeze(0)
+    ).squeeze(0)  # [C, H, W]
     
     pred_mask_original = F.interpolate(
-        pred_mask.unsqueeze(0).unsqueeze(0).float(),
+        torch.from_numpy(pred_mask).unsqueeze(0).unsqueeze(0).float(),  # [1, 1, H, W]
         size=(original_size[1], original_size[0]),
         mode='nearest'
-    ).squeeze().cpu().numpy()
+    ).squeeze().cpu().numpy().astype(np.uint8)  # [H, W]
     
     # 转换为PIL图像
     img_pil = transforms.ToPILImage()(img_original.cpu())
@@ -284,36 +304,44 @@ def create_visualization(image_tensor, segmentation, ratio, seg_ratio, img_name,
     # 合并原图和覆盖层
     combined = Image.alpha_composite(img_pil.convert('RGBA'), overlay_pil)
     
-    # 保存图像（文件名包含两种比例）
+    # 保存图像
     base_name = os.path.splitext(img_name)[0]
     output_filename = f"{base_name}_{model_type}_enc{ratio:.4f}_seg{seg_ratio:.4f}.png"
     output_path = os.path.join(output_dir, output_filename)
     combined.save(output_path)
     
     # 保存分割图
-    seg_img = Image.fromarray((pred_mask_original * 255).astype(np.uint8))
+    seg_img = Image.fromarray(pred_mask_original * 255)  # 直接乘以255，已经是uint8
     seg_filename = f"{base_name}_{model_type}_segmentation.png"
     seg_path = os.path.join(output_dir, seg_filename)
     seg_img.save(seg_path)
 
 def create_encoder_visualization(image_tensor, green_prob_map, ratio, img_name, output_dir, model_type, original_size, inv_normalize):
     """为编码器模型创建可视化结果"""
-    # 反归一化图像
-    img_denorm = inv_normalize(image_tensor).clamp(0, 1)
+    # 统一输入处理
+    if image_tensor.dim() == 4:
+        image_tensor = image_tensor.squeeze(0)
     
-    # 将概率图上采样到原始尺寸
+    # 反归一化
+    img_denorm = inv_normalize(image_tensor)
+    
+    # 修复：正确处理概率图的维度
+    if green_prob_map.dim() == 3:  # [1, H, W] 或 [C, H, W]
+        green_prob_map = green_prob_map.squeeze(0)  # 变为 [H, W]
+    
+    # 将概率图上采样到原始尺寸 - 修复维度
     prob_map_original = F.interpolate(
-        green_prob_map.unsqueeze(0), 
+        green_prob_map.unsqueeze(0).unsqueeze(0),  # [1, 1, H, W] 四维输入
         size=(original_size[1], original_size[0]),
         mode='bilinear'
-    ).squeeze().cpu().numpy()
+    ).squeeze().cpu().numpy()  # 变为 [H, W]
     
     # 将图像调整回原始尺寸
     img_original = F.interpolate(
-        img_denorm.unsqueeze(0), 
+        img_denorm.unsqueeze(0),  # [1, C, H, W]
         size=(original_size[1], original_size[0]),
         mode='bilinear'
-    ).squeeze(0)
+    ).squeeze(0)  # [C, H, W]
     
     # 转换为PIL图像
     img_pil = transforms.ToPILImage()(img_original.cpu())
@@ -356,24 +384,33 @@ def create_enet_visualization(image_tensor, enet_segmentation, ratio, img_name, 
     unique, counts = torch.unique(enet_segmentation, return_counts=True)
     print("类别分布:")
     for cls, count in zip(unique, counts):
-        print(f"  类别 {cls.item()}: {count.item()} 像素")
+        class_name = class_encoding.get(cls.item(), ("未知", (0, 0, 0)))[0]
+        print(f"  类别 {cls.item()}({class_name}): {count.item()} 像素")
 
-    # 反归一化图像
-    img_denorm = inv_normalize(image_tensor).clamp(0, 1)
+    # 统一输入处理
+    if image_tensor.dim() == 4:
+        image_tensor = image_tensor.squeeze(0)
+    
+    # 反归一化
+    img_denorm = inv_normalize(image_tensor)
+    
+    # 修复：确保分割结果是正确的维度
+    if enet_segmentation.dim() == 3:
+        enet_segmentation = enet_segmentation.squeeze(0)
     
     # 将分割结果调整回原始尺寸
     seg_original = F.interpolate(
-        enet_segmentation.unsqueeze(0).unsqueeze(0).float(),
+        enet_segmentation.unsqueeze(0).unsqueeze(0).float(),  # [1, 1, H, W]
         size=(original_size[1], original_size[0]),
         mode='nearest'
-    ).squeeze().cpu().numpy()
+    ).squeeze().cpu().numpy().astype(np.uint8)  # [H, W]
     
     # 将图像调整回原始尺寸
     img_original = F.interpolate(
-        img_denorm.unsqueeze(0), 
+        img_denorm.unsqueeze(0),  # [1, C, H, W]
         size=(original_size[1], original_size[0]),
         mode='bilinear'
-    ).squeeze(0)
+    ).squeeze(0)  # [C, H, W]
     
     # 转换为PIL图像
     img_pil = transforms.ToPILImage()(img_original.cpu())
@@ -396,12 +433,12 @@ def create_enet_visualization(image_tensor, enet_segmentation, ratio, img_name, 
     output_path = os.path.join(output_dir, output_filename)
     combined.save(output_path)
     
-    # 保存完整的分割图（所有类别）
+    # 修复：保存完整的分割图（所有类别）
     seg_rgb = np.zeros((seg_original.shape[0], seg_original.shape[1], 3), dtype=np.uint8)
     for class_idx, (class_name, color) in enumerate(class_encoding.items()):
         mask = seg_original == class_idx
         seg_rgb[mask] = color
-    
+
     seg_img = Image.fromarray(seg_rgb)
     seg_filename = f"{base_name}_{model_type}_segmentation.png"
     seg_path = os.path.join(output_dir, seg_filename)
@@ -544,7 +581,7 @@ def create_comparison_chart(results, output_dir):
     # 箱线图比较
     plt.subplot(2, 4, 6)
     data_to_plot = [full_ratios, full_seg_ratios, encoder_ratios, enet_ratios]
-    plt.boxplot(data_to_plot, labels=['完整编码', '完整分割', '编码器', 'ENet'])
+    plt.boxplot(data_to_plot, tick_labels=['完整编码', '完整分割', '编码器', 'ENet'])
     plt.ylabel('绿植比例')
     plt.title('模型比例箱线图')
     plt.grid(True, alpha=0.3)
@@ -597,11 +634,11 @@ def load_checkpoint(model, optimizer, folder_dir, filename):
 
 def main():
     # 配置参数
-    dataset_path = 'v220-2331'  # 数据集路径
-    full_model_path = 'enet_green_ratio_full.pth'  # 完整模型路径
-    encoder_model_path = 'enet_green_ratio_encoder.pth'  # 编码器模型路径
+    dataset_path = './input/v220-2331'  # 数据集路径
+    full_model_path = './output/models/enet_green_ratio_full-input480360.pth'  # 完整模型路径
+    encoder_model_path = './output/models/enet_green_ratio_encoder-input480360.pth'  # 编码器模型路径
     enet_model_path = 'save/ENet_CamVid/ENet'  # ENet模型路径（从文档2中获取）
-    output_dir = 'four_model_validation_results'  # 输出目录
+    output_dir = './output/four_model_input480360-fixdoubledeal'  # 输出目录
     
     # 验证四个模型
     results = validate_models_on_dataset(

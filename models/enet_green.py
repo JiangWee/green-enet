@@ -538,35 +538,7 @@ class ENetGreenRatio(nn.Module):
         self.dilated2_8 = RegularBottleneck(
             128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
 
-        # Stage 3 - Encoder
-        self.regular3_0 = RegularBottleneck(
-            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated3_1 = RegularBottleneck(
-            128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
-        self.asymmetric3_2 = RegularBottleneck(
-            128,
-            kernel_size=5,
-            padding=2,
-            asymmetric=True,
-            dropout_prob=0.1,
-            relu=encoder_relu)
-        self.dilated3_3 = RegularBottleneck(
-            128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
-        self.regular3_4 = RegularBottleneck(
-            128, padding=1, dropout_prob=0.1, relu=encoder_relu)
-        self.dilated3_5 = RegularBottleneck(
-            128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
-        self.asymmetric3_6 = RegularBottleneck(
-            128,
-            kernel_size=5,
-            asymmetric=True,
-            padding=2,
-            dropout_prob=0.1,
-            relu=encoder_relu)
-        self.dilated3_7 = RegularBottleneck(
-            128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
-
-        # Green ratio estimation head
+        # 绿色比例估计头移动到Stage2之后
         self.green_head = nn.Sequential(
             nn.Conv2d(128, 64, 1),  # Reduce channels
             nn.BatchNorm2d(64),
@@ -575,7 +547,35 @@ class ENetGreenRatio(nn.Module):
             nn.Sigmoid()            # Output probability between 0-1
         )
 
+        # Stage 3 - Encoder (只有在非encoder_only模式下才需要)
         if not encoder_only:
+            self.regular3_0 = RegularBottleneck(
+                128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+            self.dilated3_1 = RegularBottleneck(
+                128, dilation=2, padding=2, dropout_prob=0.1, relu=encoder_relu)
+            self.asymmetric3_2 = RegularBottleneck(
+                128,
+                kernel_size=5,
+                padding=2,
+                asymmetric=True,
+                dropout_prob=0.1,
+                relu=encoder_relu)
+            self.dilated3_3 = RegularBottleneck(
+                128, dilation=4, padding=4, dropout_prob=0.1, relu=encoder_relu)
+            self.regular3_4 = RegularBottleneck(
+                128, padding=1, dropout_prob=0.1, relu=encoder_relu)
+            self.dilated3_5 = RegularBottleneck(
+                128, dilation=8, padding=8, dropout_prob=0.1, relu=encoder_relu)
+            self.asymmetric3_6 = RegularBottleneck(
+                128,
+                kernel_size=5,
+                asymmetric=True,
+                padding=2,
+                dropout_prob=0.1,
+                relu=encoder_relu)
+            self.dilated3_7 = RegularBottleneck(
+                128, dilation=16, padding=16, dropout_prob=0.1, relu=encoder_relu)
+
             # Stage 4 - Decoder
             self.upsample4_0 = UpsamplingBottleneck(
                 128, 64, dropout_prob=0.1, relu=decoder_relu)
@@ -595,12 +595,49 @@ class ENetGreenRatio(nn.Module):
                 kernel_size=3,
                 stride=2,
                 padding=1,
-                output_padding=1,  # 添加这一行以确保输出尺寸为输入尺寸的两倍
+                output_padding=1,
                 bias=False)
 
     def set_encoder_only(self, encoder_only):
         """Switch between encoder-only and full segmentation modes."""
         self.encoder_only = encoder_only
+        # 动态添加/移除Stage3模块
+        if encoder_only:
+            # 移除Stage3模块
+            if hasattr(self, 'regular3_0'):
+                del self.regular3_0
+                del self.dilated3_1
+                del self.asymmetric3_2
+                del self.dilated3_3
+                del self.regular3_4
+                del self.dilated3_5
+                del self.asymmetric3_6
+                del self.dilated3_7
+                del self.upsample4_0
+                del self.regular4_1
+                del self.regular4_2
+                del self.upsample5_0
+                del self.regular5_1
+                del self.transposed_conv
+        else:
+            # 添加Stage3模块
+            if not hasattr(self, 'regular3_0'):
+                self.regular3_0 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=False)
+                self.dilated3_1 = RegularBottleneck(128, dilation=2, padding=2, dropout_prob=0.1, relu=False)
+                self.asymmetric3_2 = RegularBottleneck(128, kernel_size=5, padding=2, asymmetric=True, dropout_prob=0.1, relu=False)
+                self.dilated3_3 = RegularBottleneck(128, dilation=4, padding=4, dropout_prob=0.1, relu=False)
+                self.regular3_4 = RegularBottleneck(128, padding=1, dropout_prob=0.1, relu=False)
+                self.dilated3_5 = RegularBottleneck(128, dilation=8, padding=8, dropout_prob=0.1, relu=False)
+                self.asymmetric3_6 = RegularBottleneck(128, kernel_size=5, asymmetric=True, padding=2, dropout_prob=0.1, relu=False)
+                self.dilated3_7 = RegularBottleneck(128, dilation=16, padding=16, dropout_prob=0.1, relu=False)
+                
+                self.upsample4_0 = UpsamplingBottleneck(128, 64, dropout_prob=0.1, relu=True)
+                self.regular4_1 = RegularBottleneck(64, padding=1, dropout_prob=0.1, relu=True)
+                self.regular4_2 = RegularBottleneck(64, padding=1, dropout_prob=0.1, relu=True)
+                
+                self.upsample5_0 = UpsamplingBottleneck(64, 16, dropout_prob=0.1, relu=True)
+                self.regular5_1 = RegularBottleneck(16, padding=1, dropout_prob=0.1, relu=True)
+                self.transposed_conv = nn.ConvTranspose2d(16, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1, bias=False)
 
     def forward(self, x, return_features=False):
         # Initial block
@@ -627,7 +664,18 @@ class ENetGreenRatio(nn.Module):
         x = self.asymmetric2_7(x)
         x = self.dilated2_8(x)
 
-        # Stage 3 - Encoder
+        # 绿色比例估计 - 现在在Stage2之后进行
+        green_prob_map = self.green_head(x)
+        green_ratio = torch.mean(green_prob_map, dim=[1, 2, 3])
+        feature_map = x
+
+        if self.encoder_only:
+            # 只使用编码器进行绿色比例估计
+            if return_features:
+                return feature_map, green_prob_map, green_ratio
+            return green_ratio
+
+        # Stage 3 - Encoder (只有在完整分割模式下才执行)
         x = self.regular3_0(x)
         x = self.dilated3_1(x)
         x = self.asymmetric3_2(x)
@@ -637,16 +685,6 @@ class ENetGreenRatio(nn.Module):
         x = self.asymmetric3_6(x)
         x = self.dilated3_7(x)
 
-        # Green ratio estimation
-        green_prob_map = self.green_head(x)
-        green_ratio = torch.mean(green_prob_map, dim=[1, 2, 3])  # 对每个样本的空间和通道维度求平均
-        feature_map = x
-        if self.encoder_only:
-            # Inference mode: only use encoder for green ratio estimation
-            if return_features:
-                return feature_map, green_prob_map, green_ratio
-            return green_ratio
-        
         # Stage 4 - Decoder
         x = self.upsample4_0(x, max_indices2_0, output_size=stage2_input_size)
         x = self.regular4_1(x)
@@ -655,27 +693,23 @@ class ENetGreenRatio(nn.Module):
         # Stage 5 - Decoder
         x = self.upsample5_0(x, max_indices1_0, output_size=stage1_input_size)
         x = self.regular5_1(x)
-        # call ConvTranspose2d without output_size
         x = self.transposed_conv(x)
 
         if return_features:
             return x, feature_map, green_prob_map, green_ratio
         return x, green_ratio
 
-
     def get_encoder_params(self):
         """获取编码器部分（包括绿色比例估计头）的参数"""
         encoder_params = {}
         
-        # 编码器部分的所有模块
+        # 编码器部分的所有模块（现在只到Stage2）
         encoder_modules = [
             'initial_block',
             'downsample1_0', 'regular1_1', 'regular1_2', 'regular1_3', 'regular1_4',
             'downsample2_0', 'regular2_1', 'dilated2_2', 'asymmetric2_3', 
             'dilated2_4', 'regular2_5', 'dilated2_6', 'asymmetric2_7', 'dilated2_8',
-            'regular3_0', 'dilated3_1', 'asymmetric3_2', 'dilated3_3', 'regular3_4',
-            'dilated3_5', 'asymmetric3_6', 'dilated3_7',
-            'green_head'  # 包括绿色比例估计头
+            'green_head'  # 绿色比例估计头
         ]
 
         # 收集所有编码器相关参数
@@ -688,5 +722,6 @@ class ENetGreenRatio(nn.Module):
                     break
         
         return encoder_params
+
 # For backward compatibility
 ENet = ENetGreenRatio
