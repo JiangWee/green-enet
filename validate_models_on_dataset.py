@@ -635,10 +635,10 @@ def load_checkpoint(model, optimizer, folder_dir, filename):
 def main():
     # 配置参数
     dataset_path = './input/v220-2331'  # 数据集路径
-    full_model_path = './output/models/enet_green_ratio_full-input480360.pth'  # 完整模型路径
-    encoder_model_path = './output/models/enet_green_ratio_encoder-input480360.pth'  # 编码器模型路径
+    full_model_path = './output/models/enet_green_ratio_new_data_full.pth'  # 完整模型路径
+    encoder_model_path = './output/models/enet_green_ratio_new_data_encoder.pth'  # 编码器模型路径
     enet_model_path = 'save/ENet_CamVid/ENet'  # ENet模型路径（从文档2中获取）
-    output_dir = './output/four_model_input480360-fixdoubledeal'  # 输出目录
+    output_dir = './output/four_model_new_data'  # 输出目录
     
     # 验证四个模型
     results = validate_models_on_dataset(

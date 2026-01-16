@@ -6,23 +6,75 @@ import cv2
 from PIL import Image
 import torchvision.transforms as transforms
 
-def preprocess_image_for_onnx(image_path, target_size=(360, 480)):  # 统一为(height, width)
-    """修复尺寸处理，与文档1保持一致"""
-    # 使用PIL保持一致性
-    image = Image.open(image_path).convert('RGB')
-    original_size = image.size  # (width, height)
+# 保存预处理后的图像用于对比
+def save_preprocessed_image(tensor, filename):
+    """保存预处理后的图像"""
+    img_np = tensor.squeeze(0).numpy()
+    img_np = img_np.transpose(1, 2, 0)
+    img_np = (img_np * 255).astype(np.uint8)
     
-    # 调整尺寸：target_size是(height, width)，PIL需要(width, height)
+    img_pil = Image.fromarray(img_np)
+    img_pil.save(filename)
+    print(f"Python预处理图像已保存: {filename}")
+    
+# 新增调试节点1：将input tensor逆向转换回原始尺寸
+def tensor_to_image(tensor, target_size, original_size):
+    """将tensor转换回图像并调整到原始尺寸"""
+    # 移除batch维度并转换为numpy
+    img_np = tensor.squeeze(0).numpy()
+    # 从CHW转换为HWC
+    img_np = img_np.transpose(1, 2, 0)
+    # 反归一化到0-255
+    img_np = (img_np * 255).astype(np.uint8)
+    
+    # 创建PIL图像
+    img_pil = Image.fromarray(img_np)
+    
+    # 调整到原始尺寸
+    img_restored = img_pil.resize(original_size, Image.BILINEAR)
+    
+    return img_restored
+
+def preprocess_image_for_onnx(image_path, target_size=(360, 480)):
+    """统一使用RGB顺序与训练保持一致"""
+    # 使用OpenCV读取
+    image = cv2.imread(image_path)
+    if image is None:
+        raise ValueError(f"无法读取图像: {image_path}")
+    
+    # 关键修改：BGR转RGB
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # ← 添加这一行
+    
+    original_size = (image.shape[1], image.shape[0])
+    print(f"Python原始图像尺寸: {original_size[0]}x{original_size[1]}")
+    
+    # 调整尺寸
     target_height, target_width = target_size
-    image_resized = image.resize((target_width, target_height), Image.BILINEAR)
+    if original_size != (target_width, target_height):
+        image_resized = cv2.resize(image, (target_width, target_height), interpolation=cv2.INTER_LINEAR)
+        print(f"调整尺寸到: {target_width}x{target_height}")
+    else:
+        image_resized = image
+        print("使用原始尺寸，跳过resize")
     
-    # 转换为Tensor
-    transform = transforms.Compose([
-        transforms.ToTensor(),
-    ])
-    input_tensor = transform(image_resized).unsqueeze(0)  # [1, 3, H, W]
+    # 转换为float32并归一化，与训练一致
+    image_float = image_resized.astype(np.float32) / 255.0
     
-    return input_tensor.numpy(), original_size
+    # 转换为CHW格式
+    image_chw = image_float.transpose(2, 0, 1)  # HWC to CHW
+    input_tensor = np.expand_dims(image_chw, axis=0)  # [1, 3, H, W]
+    
+    return input_tensor, original_size
+    
+def save_preprocessed_image(tensor, filename):
+    """保存预处理后的图像"""
+    img_np = tensor.squeeze(0).numpy()
+    img_np = img_np.transpose(1, 2, 0)
+    img_np = (img_np * 255).astype(np.uint8)
+    
+    img_pil = Image.fromarray(img_np)
+    img_pil.save(filename)
+    print(f"Python预处理图像已保存: {filename}")
 
 def test_onnx_model(onnx_path, input_tensor, model_type):
     """测试ONNX模型推理"""
@@ -51,7 +103,7 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
             output_names, 
             {input_name: input_tensor}
         )
-        
+        output_match = compare_output_tensors(ort_outputs, "./output/debug_cpp")
         # 添加详细的调试信息
         print(f"输入张量范围: [{input_tensor.min():.3f}, {input_tensor.max():.3f}]")
         print(f"输入张量均值: {input_tensor.mean():.3f}")
@@ -165,10 +217,135 @@ def save_segmentation_visualization(segmentation, original_size, filename, model
     except Exception as e:
         print(f"保存可视化失败: {e}")
 
+
+def save_tensor_debug(tensor, filename_prefix, language):
+    """保存张量调试信息"""
+    # 保存二进制文件
+    tensor.tofile(f"{filename_prefix}_{language}_tensor.bin")
+    
+    # 保存统计信息
+    stats = {
+        'min': tensor.min(),
+        'max': tensor.max(),
+        'mean': tensor.mean(),
+        'std': tensor.std(),
+        'shape': tensor.shape
+    }
+    
+    print(f"{language}输入张量统计 - 最小值: {stats['min']:.6f}, "
+          f"最大值: {stats['max']:.6f}, 均值: {stats['mean']:.6f}, "
+          f"形状: {tensor.shape}")
+    
+    # 保存前10个值
+    with open(f"{filename_prefix}_{language}_sample.txt", "w") as f:
+        flat_tensor = tensor.flatten()
+        for i in range(min(10, flat_tensor.size)):
+            f.write(f"{flat_tensor[i]:.6f}\n")
+    
+    return stats
+
+def compare_input_tensors(cpp_file, python_tensor, tolerance=1e-5):
+    """比对C++和Python的输入张量"""
+    try:
+        # 读取C++保存的张量
+        cpp_data = np.fromfile(cpp_file, dtype=np.float32)
+        python_flat = python_tensor.flatten()
+        
+        print(f"C++张量大小: {cpp_data.size}, Python张量大小: {python_flat.size}")
+        
+        if cpp_data.size != python_flat.size:
+            print("错误: 张量尺寸不匹配!")
+            return False
+
+        # 逐元素比对
+        max_diff = 0
+        diff_count = 0
+        for i in range(cpp_data.size):
+            diff = abs(cpp_data[i] - python_flat[i])
+            if diff > tolerance:
+                diff_count += 1
+                max_diff = max(max_diff, diff)
+                if diff_count <= 10:  # 只打印前10个差异
+                    print(f"位置 {i}: C++={cpp_data[i]:.6f}, Python={python_flat[i]:.6f}, 差异={diff:.6f}")
+        
+        if diff_count > 0:
+            print(f"发现 {diff_count} 个差异点，最大差异: {max_diff:.6f}")
+            return False
+        else:
+            print("输入张量完全一致!")
+            return True
+            
+    except Exception as e:
+        print(f"比对输入张量时出错: {e}")
+        return False
+    
+def compare_output_tensors(python_outputs, cpp_prefix, tolerance=1e-5):
+    """比对C++和Python的输出张量"""
+    results = {}
+    
+    for i, py_output in enumerate(python_outputs):
+        cpp_filename = f"{cpp_prefix}_output_node_{i}.bin"
+        
+        try:
+            # 读取C++输出
+            cpp_data = np.fromfile(cpp_filename, dtype=np.float32)
+            py_flat = py_output.flatten()
+            
+            print(f"\n比对输出节点 {i}:")
+            print(f"C++形状: {cpp_data.shape}, Python形状: {py_output.shape}")
+            print(f"C++范围: [{cpp_data.min():.6f}, {cpp_data.max():.6f}]")
+            print(f"Python范围: [{py_output.min():.6f}, {py_output.max():.6f}]")
+            
+            if cpp_data.size != py_flat.size:
+                print("错误: 输出张量尺寸不匹配!")
+                results[i] = False
+                continue
+                
+            # 逐元素比对
+            max_diff = 0
+            diff_count = 0
+            for j in range(cpp_data.size):
+                diff = abs(cpp_data[j] - py_flat[j])
+                if diff > tolerance:
+                    diff_count += 1
+                    max_diff = max(max_diff, diff)
+                    
+            if diff_count > 0:
+                print(f"发现 {diff_count} 个差异点，最大差异: {max_diff:.6f}")
+                results[i] = False
+            else:
+                print("输出张量完全一致!")
+                results[i] = True
+                
+        except Exception as e:
+            print(f"比对输出节点 {i} 时出错: {e}")
+            results[i] = False
+            
+    return results
+
+
+def debug_tensor_comparison(cpp_tensor, python_tensor):
+    """详细对比两个张量的差异"""
+    cpp_flat = cpp_tensor.flatten()
+    python_flat = python_tensor.flatten()
+    
+    print("=== 详细张量对比 ===")
+    print(f"CPP张量形状: {cpp_tensor.shape}")
+    print(f"Python张量形状: {python_tensor.shape}")
+    print(f"CPP范围: [{cpp_flat.min():.6f}, {cpp_flat.max():.6f}]")
+    print(f"Python范围: [{python_flat.min():.6f}, {python_flat.max():.6f}]")
+    
+    # 检查前10个像素的差异
+    print("前10个像素对比:")
+    for i in range(min(10, len(cpp_flat))):
+        diff = abs(cpp_flat[i] - python_flat[i])
+        print(f"像素{i}: C++={cpp_flat[i]:.6f}, Python={python_flat[i]:.6f}, 差异={diff:.6f}")
+
+
 def main():
     """主函数 - 对比三个模型在Python和C++中的结果"""
     # 图像路径
-    image_path = "./input/v220-2331/s001_iso189_10_17.bmp"
+    image_path = "./new_labeled_data_2331/train/images/output_s001_iso189_480360.bmp"
     if not Path(image_path).exists():
         print(f"错误：图像文件不存在: {image_path}")
         return
@@ -181,12 +358,12 @@ def main():
             "name": "多标签库"
         },
         {
-            "path": "./output/models/enet_green_ratio_full_static_opset11_input480360.onnx", 
+            "path": "./output/models/enet_green_ratio_full_static_opset11_new_data.onnx", 
             "type": "full",
             "name": "新训练full库"
         },
         {
-            "path": "./output/models/enet_green_ratio_encoder_static_opset11_input480360.onnx",
+            "path": "./output/models/enet_green_ratio_encoder_static_opset11_new_data.onnx",
             "type": "encoder", 
             "name": "新训练encoder库"
         }
@@ -197,7 +374,11 @@ def main():
     input_tensor, original_size = preprocess_image_for_onnx(image_path)
     print(f"输入张量形状: {input_tensor.shape}")
     print(f"原始图像尺寸: {original_size}")
-    
+
+    python_stats = save_tensor_debug(input_tensor, "./output/onnx/debug", "python")
+    input_match = compare_input_tensors("./output/onnx/cpp_actual_input_tensor.bin", input_tensor)
+
+
     # 存储结果
     python_results = {}
     
@@ -212,7 +393,7 @@ def main():
             continue
             
         results = test_onnx_model(config['path'], input_tensor, config['type'])
-        
+
         if results is not None:
             python_results[config['type']] = results
             
@@ -259,10 +440,10 @@ def main():
     
     # C++结果（从您提供的数据）
     cpp_results = {
-        'multi_class': 8.74561,      # 多标签库植被比例
-        'full_segmentation': 4.03877,  # full库分割统计
-        'full_direct': 6.62857,       # full库直接输出
-        'encoder': 6.62857           # encoder库直接输出
+        'multi_class': 6.59336,      # 多标签库植被比例
+        'full_segmentation': 4.23438,  # full库分割统计
+        'full_direct': 4.55093,       # full库直接输出
+        'encoder': 4.55093           # encoder库直接输出
     }
     
     # 对比分析

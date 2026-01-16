@@ -331,10 +331,10 @@ def main():
     safe_print("=" * 50)
     
     # 在这里集中配置所有路径
-    encoder_model_path = './output/enet_green_ratio_encoder-input480360.pth'
-    full_model_path = './output/enet_green_ratio_full-input480360.pth'
-    output_dir = './output'
-    suffix = 'input480360'
+    encoder_model_path = './output/models/enet_green_ratio_new_data_encoder.pth'
+    full_model_path = './output/models/enet_green_ratio_new_data_full.pth'
+    output_dir = './output/models'
+    suffix = 'new_data'
 
     # 验证路径是否存在
     safe_print("[信息] 配置检查:")

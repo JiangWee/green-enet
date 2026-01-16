@@ -17,7 +17,7 @@ def count_parameters(model):
     """计算模型参数量"""
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def train_green_ratio():
+def train_green_ratio(train_dirs, val_dirs, encoder_pth_name='enet_green_ratio_encoder.pth', full_pth_name='enet_green_ratio_full.pth'):
     # 配置参数
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_classes = 2
@@ -38,16 +38,16 @@ def train_green_ratio():
     
     # 首先检查数据集
     print("🔍 检查训练数据集...")
-    check_dataset_labels('camvid_binary/train')
+    check_dataset_labels(train_dirs)
     
     print("\n🔍 检查验证数据集...")
-    check_dataset_labels('camvid_binary/val')
+    check_dataset_labels(val_dirs)
 
     # 加载二分类数据集
-    train_dataset = BinaryCamVidDataset('camvid_binary/train', 
+    train_dataset = MultiSourceDataset(train_dirs, 
                                     image_transform=image_transform, 
                                     label_transform=label_transform)
-    val_dataset = BinaryCamVidDataset('camvid_binary/val', 
+    val_dataset = MultiSourceDataset(val_dirs, 
                                     image_transform=image_transform, 
                                     label_transform=label_transform)
     
@@ -199,10 +199,10 @@ def train_green_ratio():
     torch.save({
         'encoder_state_dict': model.get_encoder_params(),
         'epoch': num_epochs
-    }, 'enet_green_ratio_encoder.pth')
+    }, encoder_pth_name)
     
     # 保存完整模型用于debug
-    torch.save(model.state_dict(), 'enet_green_ratio_full.pth')
+    torch.save(model.state_dict(), full_pth_name)
     
     # 打印保存的模型参数量
     print("\n保存的模型参数量:")
@@ -210,7 +210,7 @@ def train_green_ratio():
     
     # 加载编码器模型并打印参数量
     encoder_model = ENetGreenRatio(num_classes=2, encoder_only=True)  # 添加num_classes
-    checkpoint = torch.load('enet_green_ratio_encoder.pth', map_location='cpu')
+    checkpoint = torch.load(encoder_pth_name, map_location='cpu')
     
     # 修复：直接加载到模型
     encoder_model.load_state_dict(checkpoint['encoder_state_dict'], strict=False)
@@ -219,16 +219,16 @@ def train_green_ratio():
     
     # 加载完整模型并打印参数量
     full_model = ENetGreenRatio(num_classes=num_classes, encoder_only=False)
-    full_model.load_state_dict(torch.load('enet_green_ratio_full.pth', map_location='cpu'))
+    full_model.load_state_dict(torch.load(full_pth_name, map_location='cpu'))
     full_params = count_parameters(full_model)
     print(f"完整模型参数量: {full_params:,}")
     
     # 在验证集上保存可视化结果
     validate_and_save_visualizations(full_model, val_loader, device, 'validation_results')
 
-class BinaryCamVidDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, image_transform=None, label_transform=None, debug=False):
-        self.data_dir = data_dir
+class MultiSourceDataset(torch.utils.data.Dataset):
+    def __init__(self, data_dirs, image_transform=None, label_transform=None, debug=False):
+        self.data_dirs = data_dirs if isinstance(data_dirs, list) else [data_dirs]
         self.image_transform = image_transform
         self.label_transform = label_transform
         self.debug = debug  # 新增debug标志
@@ -236,28 +236,38 @@ class BinaryCamVidDataset(torch.utils.data.Dataset):
         
         self.images = []
         self.labels = []
+
+        for data_dir in self.data_dirs:
+            print(f"data_dir: {data_dir}")
+            image_dir = os.path.join(data_dir, 'images')
+            label_dir = os.path.join(data_dir, 'labels')
+            
+            if not os.path.exists(image_dir):
+                print(f"⚠️  图像目录不存在: {image_dir}")
+                continue
+            if not os.path.exists(label_dir):
+                print(f"⚠️  标签目录不存在: {label_dir}")
+                continue
+            
+            for img_name in os.listdir(image_dir):
+                if img_name.endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                    img_path = os.path.join(image_dir, img_name)
+                    
+                    # 去掉原图后缀，统一使用.png作为标签后缀
+                    base_name = os.path.splitext(img_name)[0]  # 去掉后缀
+                    label_name = base_name + '.png'  # 统一使用.png后缀
+                    label_path = os.path.join(label_dir, label_name)
+                    
+                    print(f"img_name: {img_name}, label_name: {label_name}")
+                    
+                    if os.path.exists(label_path):
+                        self.images.append(img_path)
+                        self.labels.append(label_path)
+                    else:
+                        print(f"⚠️  标签文件不存在: {label_path}")
         
-        image_dir = os.path.join(data_dir, 'images')
-        label_dir = os.path.join(data_dir, 'labels')
-        
-        # 检查目录是否存在
-        if not os.path.exists(image_dir):
-            print(f"❌ 图像目录不存在: {image_dir}")
-        if not os.path.exists(label_dir):
-            print(f"❌ 标签目录不存在: {label_dir}")
-        
-        for img_name in os.listdir(image_dir):
-            if img_name.endswith(('.png', '.jpg', '.jpeg')):
-                img_path = os.path.join(image_dir, img_name)
-                label_path = os.path.join(label_dir, img_name)
-                
-                if os.path.exists(label_path):
-                    self.images.append(img_path)
-                    self.labels.append(label_path)
-                else:
-                    print(f"⚠️  标签文件不存在: {label_path}")
-        
-        print(f"📊 数据集统计: {len(self.images)} 个样本")
+        print(f"📊📊 多源数据集统计: {len(self.images)} 个样本")
+        print(f"数据源: {self.data_dirs}")
     
     def __len__(self):
         return len(self.images)
@@ -294,7 +304,7 @@ class BinaryCamVidDataset(torch.utils.data.Dataset):
         
         return image, label
 
-def check_dataset_labels(data_dir, num_samples=10):
+def check_dataset_labels(data_dirs, num_samples=10):
     """检查数据集标签的分布情况"""
     print("=" * 60)
     print("数据集标签检查")
@@ -302,17 +312,17 @@ def check_dataset_labels(data_dir, num_samples=10):
     
     # 创建简单的transform来检查原始数据
     simple_transform = transforms.Compose([
-        transforms.Resize((512, 512)),
+        transforms.Resize((360, 480)),
         transforms.ToTensor()
     ])
     
     # 替换原来的label_transform
     label_transform = transforms.Compose([
-        transforms.Resize((512, 512), interpolation=transforms.InterpolationMode.NEAREST),
+        transforms.Resize((360, 480), interpolation=transforms.InterpolationMode.NEAREST),
         transforms.Lambda(lambda x: torch.from_numpy(np.array(x)).long())
     ])
 
-    dataset = BinaryCamVidDataset(data_dir, 
+    dataset = MultiSourceDataset(data_dirs, 
                                 image_transform=simple_transform, 
                                 label_transform=label_transform,
                                 debug=True)
@@ -786,9 +796,21 @@ if __name__ == '__main__':
     # print("开始数据检查...")
     # check_dataset_labels('camvid_binary/train', num_samples=5)
     # check_dataset_labels('camvid_binary/val', num_samples=5)
+    # 配置多个数据源
+    train_sources = [
+        'camvid_binary/train',  
+        'new_labeled_data_2331/train'  
+    ]
+
+        # 配置多个数据源
+    val_sources = [
+        'camvid_binary/val',  
+        'new_labeled_data_2331/val'  
+    ]
 
     # 训练模型
-    train_green_ratio()
+    train_green_ratio(train_sources, val_sources, encoder_pth_name='enet_green_ratio_new_data_encoder.pth',
+                      full_pth_name='enet_green_ratio_new_data_full.pth')
 
     # 验证编码器对齐性
     # validate_encoder_alignment()

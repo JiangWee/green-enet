@@ -11,6 +11,7 @@
 | :-----: | :---: | :------: | :---: | :---: | :------: | :---: | :---------: | :---: | :---: | :--------: | :-------: |
 | IoU (%) | 90.2  |   68.6   | 22.6  | 91.5  |   73.2   | 63.6  |    19.3     | 16.7  | 65.1  |    27.2    |   35.0    |
 
+
 ## Per-class IoU: Cityscapes<sup>4</sup>
 
 |         | Road  | Sidewalk | Building | Wall  | Fence | Pole  | Traffic light | Traffic Sign | Vegetation | Terrain |  Sky  | Person | Rider |  Car  | Truck |  Bus  | Train | Motorcycle | Bicycle |
