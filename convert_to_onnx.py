@@ -325,16 +325,40 @@ def test_model_inference(encoder_model_path, full_model_path):
         except Exception as e:
             safe_print(f"[错误] 完整模型推理失败: {e}")
 
+
+def create_random_model_if_needed():
+    """如果模型文件不存在，创建随机权重模型"""
+    encoder_path = './output/models/enet_green_ratio_random_encoder.pth'
+    full_path = './output/models/enet_green_ratio_random_full.pth'
+    
+    if not os.path.exists(encoder_path):
+        print("创建随机权重编码器模型...")
+        model = ENetGreenRatio(num_classes=2, encoder_only=True)
+        torch.save({
+            'encoder_state_dict': model.state_dict(),
+            'epoch': 0
+        }, encoder_path)
+        print(f"✅ 已创建: {encoder_path}")
+    
+    if not os.path.exists(full_path):
+        print("创建随机权重完整模型...")
+        model = ENetGreenRatio(num_classes=2, encoder_only=False)
+        torch.save(model.state_dict(), full_path)
+        print(f"✅ 已创建: {full_path}")
+
+
 def main():
+    # create_random_model_if_needed()
+
     """主函数 - 集中管理所有路径配置"""
     safe_print("绿植比例估计模型转换工具 (静态模式)")
     safe_print("=" * 50)
     
     # 在这里集中配置所有路径
-    encoder_model_path = './output/models/enet_green_ratio_new_data_encoder.pth'
-    full_model_path = './output/models/enet_green_ratio_new_data_full.pth'
+    encoder_model_path = './output/models/enet_green_ratio_encoder_simplifiedInit.pth'
+    full_model_path = './output/models/enet_green_ratio_full_simplifiedInit.pth'
     output_dir = './output/models'
-    suffix = 'new_data'
+    suffix = 'simplifiedInit'
 
     # 验证路径是否存在
     safe_print("[信息] 配置检查:")

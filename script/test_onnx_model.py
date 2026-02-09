@@ -345,6 +345,7 @@ def debug_tensor_comparison(cpp_tensor, python_tensor):
 def main():
     """主函数 - 对比三个模型在Python和C++中的结果"""
     # 图像路径
+    # image_path = "./new_labeled_data_2331/train/images/output_s001_iso189_480360.bmp"
     image_path = "./new_labeled_data_2331/train/images/output_s001_iso189_480360.bmp"
     if not Path(image_path).exists():
         print(f"错误：图像文件不存在: {image_path}")

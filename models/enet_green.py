@@ -70,6 +70,32 @@ class InitialBlock(nn.Module):
 
         return self.out_activation(out)
 
+class SimplifiedInitialBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, bias=False, relu=True):
+        super().__init__()
+        
+        if relu:
+            activation = nn.ReLU
+        else:
+            activation = nn.PReLU
+
+        # 使用单个卷积替代原来的双分支
+        self.conv = nn.Conv2d(
+            in_channels,
+            out_channels,  # 直接输出目标通道数
+            kernel_size=3,
+            stride=2,
+            padding=1,
+            bias=bias)
+        
+        self.batch_norm = nn.BatchNorm2d(out_channels)
+        self.out_activation = activation()
+
+    def forward(self, x):
+        out = self.conv(x)
+        out = self.batch_norm(out)
+        return self.out_activation(out)
+    
 
 class RegularBottleneck(nn.Module):
     """Regular bottlenecks are the main building block of ENet.
@@ -486,7 +512,9 @@ class ENetGreenRatio(nn.Module):
 
         self.encoder_only = encoder_only
 
-        self.initial_block = InitialBlock(3, 16, relu=encoder_relu)
+        # self.initial_block = InitialBlock(3, 16, relu=encoder_relu)
+        # 原来的InitialBlock用两路编译会有问题，其中分路的maxpool和后面concat会有问题，这里改为SimplifiedInitialBlock单路
+        self.initial_block = SimplifiedInitialBlock(3, 16, relu=encoder_relu)
 
         # Stage 1 - Encoder
         self.downsample1_0 = DownsamplingBottleneck(
