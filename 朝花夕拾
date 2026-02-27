@@ -1,0 +1,28 @@
+环境准备：
+.\.venv11\Scripts\activate
+
+
+
+
+
+
+发现有绿植比例不准确，需要进行debug的路径：
+1.可以复现问题的截图，在test_onnx_model.py上可以跑mask，直观的观察出绿植的分割问题；
+    1.1  在test_onnx_model.py中填充image_path = "./input/test/output_s500_iso113_480360.bmp"，运行python .\script\test_onnx_model.py即可。
+    1.2  在test_onnx_model.py中通过修改函数input_tensor, original_size = preprocess_image_for_onnx(image_path,debug_save_path="./output/onnx/input_tensor.bmp")的第二个参数，保存480x360分辨率的图片，方便后续重新训练使用。
+    1.3  将
+2.如果要修复，需要进行重新打标签，训练，转化onnx库的过程：
+    2.1 重新打标签：使用AnyLabeling进行打标签。软件位置：D:\software\AnyLabeling-Windows-CPU-x64.exe ，软件大概功能和使用流程：
+        2.1.1 左侧一列是功能列，第一个符号打开文件夹，可以打开上述保存的图片所在的文件夹./output/onnx/；
+        2.1.2 左侧一列的最后一个符号有个大脑，打开使用别人训练好的模型进行自动标志，点击大脑之后，在顶部会出现一行选择模型，点击选择模型，模型路径：D:\software\modelsforanylabeling\mobile_sam_20230629，会发现加载config.yaml
+        2.1.3 在第三行的选择中，选定点。此时可以把分割的位置点选出来，工具自动描出边缘。确认之后点击完成对象。保存标签名称，绿植这里是vegetable。
+        2.1.4 完成标注之后，点击第一行工具，导出标注，格式选择COCO，源文件选当前文件夹，输出文件夹中会导出annotations.json文件以描述分割范围。
+        2.1.5 使用convert_coco_to_png.py，修改路径：base_path = r"D:\code\PyTorch-ENet-master\PyTorch-ENet-master\input\test-coco"，另一个参数folders = ["train", "val", "test"]是对于放弃旧数据，完全使用新数据重新做训练用的，可以不用配置。
+              这里把annotations.json中的标注填充到label文件中，注意annotations.json中的标注是不是想要的。
+        2.1.6 验证标签，这一步可以省略，也可以做：.\script\check_labels.py，会覆盖mask到分割区域上，这样可以验证分割区域是否正确。
+        2.1.7 将标注好的图，放入训练的文件夹new_labeled_data_2331中，现在的数据集结构是："train", "val", "test"，将bmp后缀也就是原图放入train-images,将png后缀也就是标签图放入train-labels
+    2.2 使用train-green.py进行训练，修改输出的encoder_pth_name和efull_pth_name
+    2.3 训练结束用validate_models_on_dataset进行pth库的验证，输出3个模型的验证图，需要修改参数：    
+            dataset_path = './input/v220-2331'  # 数据集路径
+            full_model_path = './output/models/enet_green_ratio_full_officeVegetable.pth'  # 完整模型路径
+            encoder_model_path = './output/models/enet_green_ratio_encoder_officeVegetable.pth'  # 编码器模型路径

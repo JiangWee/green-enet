@@ -211,19 +211,19 @@ def main():
     # 模型配置
     model_configs = [
         {
-            "path": "./output/models/enet_model_opset11.onnx",
+            "path": "./results/models/enet_model_opset11.onnx",
             "type": "multi_class", 
             "name": "多标签库",
             "enabled": True
         },
         {
-            "path": "./output/models/enet_green_ratio_full_static_opset11_officeGreenAndOriInput.onnx", 
+            "path": "./results/models/enet_green_ratio_full_static_opset11_officeGreenAndOriInput.onnx", 
             "type": "full",
             "name": "新训练full库",
             "enabled": True
         },
         {
-            "path": "./output/models/enet_green_ratio_encoder_static_opset11_officeGreenAndOriInput.onnx",
+            "path": "./results/models/enet_green_ratio_encoder_static_opset11_officeGreenAndOriInput.onnx",
             "type": "encoder", 
             "name": "新训练encoder库",
             "enabled": True

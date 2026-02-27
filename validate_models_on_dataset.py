@@ -635,8 +635,8 @@ def load_checkpoint(model, optimizer, folder_dir, filename):
 def main():
     # 配置参数
     dataset_path = './input/v220-2331'  # 数据集路径
-    full_model_path = './output/models/enet_green_ratio_full_officeGreenAndOriInput.pth'  # 完整模型路径
-    encoder_model_path = './output/models/enet_green_ratio_encoder_officeGreenAndOriInput.pth'  # 编码器模型路径
+    full_model_path = './results/models/enet_green_ratio_full_officeGreenAndOriInput.pth'  # 完整模型路径
+    encoder_model_path = './results/models/enet_green_ratio_encoder_officeGreenAndOriInput.pth'  # 编码器模型路径
     enet_model_path = 'save/ENet_CamVid/ENet'  # ENet模型路径（从文档2中获取）
     output_dir = './output/four_model_officeGreenAndOriInput'  # 输出目录
     
