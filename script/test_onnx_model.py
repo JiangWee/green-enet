@@ -6,36 +6,7 @@ import cv2
 from PIL import Image
 import torchvision.transforms as transforms
 
-# 保存预处理后的图像用于对比
-def save_preprocessed_image(tensor, filename):
-    """保存预处理后的图像"""
-    img_np = tensor.squeeze(0).numpy()
-    img_np = img_np.transpose(1, 2, 0)
-    img_np = (img_np * 255).astype(np.uint8)
-    
-    img_pil = Image.fromarray(img_np)
-    img_pil.save(filename)
-    print(f"Python预处理图像已保存: {filename}")
-    
-# 新增调试节点1：将input tensor逆向转换回原始尺寸
-def tensor_to_image(tensor, target_size, original_size):
-    """将tensor转换回图像并调整到原始尺寸"""
-    # 移除batch维度并转换为numpy
-    img_np = tensor.squeeze(0).numpy()
-    # 从CHW转换为HWC
-    img_np = img_np.transpose(1, 2, 0)
-    # 反归一化到0-255
-    img_np = (img_np * 255).astype(np.uint8)
-    
-    # 创建PIL图像
-    img_pil = Image.fromarray(img_np)
-    
-    # 调整到原始尺寸
-    img_restored = img_pil.resize(original_size, Image.BILINEAR)
-    
-    return img_restored
-
-def preprocess_image_for_onnx(image_path, target_size=(360, 480)):
+def preprocess_image_for_onnx(image_path, target_size=(360, 480), debug_save_path=None):
     """统一使用RGB顺序与训练保持一致"""
     # 使用OpenCV读取
     image = cv2.imread(image_path)
@@ -43,7 +14,7 @@ def preprocess_image_for_onnx(image_path, target_size=(360, 480)):
         raise ValueError(f"无法读取图像: {image_path}")
     
     # 关键修改：BGR转RGB
-    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)  # ← 添加这一行
+    image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     
     original_size = (image.shape[1], image.shape[0])
     print(f"Python原始图像尺寸: {original_size[0]}x{original_size[1]}")
@@ -57,7 +28,13 @@ def preprocess_image_for_onnx(image_path, target_size=(360, 480)):
         image_resized = image
         print("使用原始尺寸，跳过resize")
     
-    # 转换为float32并归一化，与训练一致
+    if debug_save_path:
+        # 保存调试图像
+        debug_image_bgr = cv2.cvtColor(image_resized, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(debug_save_path, debug_image_bgr)
+        print(f"调试图像已保存: {debug_save_path}")
+
+    # 转换为float32并归一化
     image_float = image_resized.astype(np.float32) / 255.0
     
     # 转换为CHW格式
@@ -65,16 +42,6 @@ def preprocess_image_for_onnx(image_path, target_size=(360, 480)):
     input_tensor = np.expand_dims(image_chw, axis=0)  # [1, 3, H, W]
     
     return input_tensor, original_size
-    
-def save_preprocessed_image(tensor, filename):
-    """保存预处理后的图像"""
-    img_np = tensor.squeeze(0).numpy()
-    img_np = img_np.transpose(1, 2, 0)
-    img_np = (img_np * 255).astype(np.uint8)
-    
-    img_pil = Image.fromarray(img_np)
-    img_pil.save(filename)
-    print(f"Python预处理图像已保存: {filename}")
 
 def test_onnx_model(onnx_path, input_tensor, model_type):
     """测试ONNX模型推理"""
@@ -84,8 +51,6 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
         print(f"错误：模型文件不存在于 {onnx_path}")
         return None
 
-
-    
     try:
         # 创建推理会话
         ort_session = onnxruntime.InferenceSession(onnx_path)
@@ -103,14 +68,12 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
             output_names, 
             {input_name: input_tensor}
         )
-        output_match = compare_output_tensors(ort_outputs, "./output/debug_cpp")
+        
         # 添加详细的调试信息
         print(f"输入张量范围: [{input_tensor.min():.3f}, {input_tensor.max():.3f}]")
         print(f"输入张量均值: {input_tensor.mean():.3f}")
-        # 详细的输出分析
         print(f"输出数量: {len(ort_outputs)}")
-        for i, output in enumerate(ort_outputs):
-            print(f"输出{i}: 形状{output.shape}, 范围[{output.min():.3f}, {output.max():.3f}]")
+        
         results = {}
         
         # 根据模型类型处理输出
@@ -134,17 +97,13 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
             
         elif model_type == "full":
             # 检查输出结构，可能需要调整
-            if len(ort_outputs) >= 2:
-                # 根据形状判断哪个是分割图，哪个是比例
-                for i, output in enumerate(ort_outputs):
-                    if output.ndim == 4:  # [1, C, H, W] 可能是分割图
-                        segmentation = output
-                    elif output.ndim == 2 or output.size == 1:  # 可能是比例
-                        direct_ratio = output
+            segmentation = ort_outputs[0]
+            direct_ratio = ort_outputs[1] if len(ort_outputs) > 1 else None
             
             print(f"分割输出形状: {segmentation.shape}")
-            print(f"直接输出形状: {direct_ratio.shape}")
-            print(f"直接输出值: {direct_ratio}")
+            if direct_ratio is not None:
+                print(f"直接输出形状: {direct_ratio.shape}")
+                print(f"直接输出值: {direct_ratio}")
             
             # 统计分割图的植被比例（新训练模型中植被是类别1）
             pred_mask = np.argmax(segmentation[0], axis=0)  # [H, W]
@@ -153,10 +112,12 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
             segmentation_ratio = vegetation_pixels / total_pixels
             
             # 直接输出的绿植比例
-            if direct_ratio.size == 1:
-                direct_ratio_value = float(direct_ratio[0])
-            else:
-                direct_ratio_value = float(np.mean(direct_ratio))
+            direct_ratio_value = 0
+            if direct_ratio is not None:
+                if direct_ratio.size == 1:
+                    direct_ratio_value = float(direct_ratio[0])
+                else:
+                    direct_ratio_value = float(np.mean(direct_ratio))
             
             results['vegetation_ratio_segmentation'] = segmentation_ratio
             results['vegetation_ratio_direct'] = direct_ratio_value
@@ -176,7 +137,6 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
             
             results['vegetation_ratio'] = vegetation_ratio
             
-        # 运行推理后
         print(f"推理完成，输出数量: {len(ort_outputs)}")
         return results
         
@@ -186,205 +146,118 @@ def test_onnx_model(onnx_path, input_tensor, model_type):
         traceback.print_exc()
         return None
 
-def save_segmentation_visualization(segmentation, original_size, filename, model_type):
-    """保存分割结果可视化"""
-    try:
-        # 将分割图上采样到原始尺寸
-        if len(segmentation.shape) == 2:  # [H, W]
-            seg_resized = cv2.resize(
-                segmentation.astype(np.uint8), 
-                (original_size[0], original_size[1]),  # 修复：使用(宽, 高)
-                interpolation=cv2.INTER_NEAREST
-            )
-        else:
-            print(f"不支持的分割图形状: {segmentation.shape}")
-            return
-        
-        # 根据模型类型确定植被标签
-        if model_type == "multi_class":
-            vegetation_label = 5
-        else:  # full模型
-            vegetation_label = 1
-        
-        # 创建植被掩码（植被为白色，其他为黑色）
-        vegetation_mask = np.zeros_like(seg_resized, dtype=np.uint8)
-        vegetation_mask[seg_resized == vegetation_label] = 255
-        
-        # 保存为BMP
-        cv2.imwrite(filename, vegetation_mask)
-        print(f"植被掩码已保存: {filename}")
-        
-    except Exception as e:
-        print(f"保存可视化失败: {e}")
-
-
-def save_tensor_debug(tensor, filename_prefix, language):
-    """保存张量调试信息"""
-    # 保存二进制文件
-    tensor.tofile(f"{filename_prefix}_{language}_tensor.bin")
+def create_green_overlay(original_image, segmentation, original_size, target_size, model_type, alpha=0.5):
+    """创建绿色透明掩膜覆盖在原图上"""
+    # 将分割图上采样到原始尺寸
+    seg_resized = cv2.resize(
+        segmentation.astype(np.uint8), 
+        original_size,  # (宽, 高)
+        interpolation=cv2.INTER_NEAREST
+    )
     
-    # 保存统计信息
-    stats = {
-        'min': tensor.min(),
-        'max': tensor.max(),
-        'mean': tensor.mean(),
-        'std': tensor.std(),
-        'shape': tensor.shape
-    }
+    # 根据模型类型确定植被标签
+    if model_type == "multi_class":
+        vegetation_label = 5
+    else:  # full模型
+        vegetation_label = 1
     
-    print(f"{language}输入张量统计 - 最小值: {stats['min']:.6f}, "
-          f"最大值: {stats['max']:.6f}, 均值: {stats['mean']:.6f}, "
-          f"形状: {tensor.shape}")
+    # 创建绿色掩膜（植被区域为绿色，其他区域透明）
+    overlay = original_image.copy()
     
-    # 保存前10个值
-    with open(f"{filename_prefix}_{language}_sample.txt", "w") as f:
-        flat_tensor = tensor.flatten()
-        for i in range(min(10, flat_tensor.size)):
-            f.write(f"{flat_tensor[i]:.6f}\n")
+    # 创建植被区域的掩码
+    vegetation_mask = seg_resized == vegetation_label
     
-    return stats
+    # 将植被区域设置为绿色 (BGR格式)
+    overlay[vegetation_mask] = [0, 255, 0]  # 绿色
+    
+    # 将原图与绿色掩膜混合
+    result = cv2.addWeighted(original_image, 1 - alpha, overlay, alpha, 0)
+    
+    return result
 
-def compare_input_tensors(cpp_file, python_tensor, tolerance=1e-5):
-    """比对C++和Python的输入张量"""
-    try:
-        # 读取C++保存的张量
-        cpp_data = np.fromfile(cpp_file, dtype=np.float32)
-        python_flat = python_tensor.flatten()
-        
-        print(f"C++张量大小: {cpp_data.size}, Python张量大小: {python_flat.size}")
-        
-        if cpp_data.size != python_flat.size:
-            print("错误: 张量尺寸不匹配!")
-            return False
-
-        # 逐元素比对
-        max_diff = 0
-        diff_count = 0
-        for i in range(cpp_data.size):
-            diff = abs(cpp_data[i] - python_flat[i])
-            if diff > tolerance:
-                diff_count += 1
-                max_diff = max(max_diff, diff)
-                if diff_count <= 10:  # 只打印前10个差异
-                    print(f"位置 {i}: C++={cpp_data[i]:.6f}, Python={python_flat[i]:.6f}, 差异={diff:.6f}")
-        
-        if diff_count > 0:
-            print(f"发现 {diff_count} 个差异点，最大差异: {max_diff:.6f}")
-            return False
-        else:
-            print("输入张量完全一致!")
-            return True
-            
-    except Exception as e:
-        print(f"比对输入张量时出错: {e}")
-        return False
-    
-def compare_output_tensors(python_outputs, cpp_prefix, tolerance=1e-5):
-    """比对C++和Python的输出张量"""
-    results = {}
-    
-    for i, py_output in enumerate(python_outputs):
-        cpp_filename = f"{cpp_prefix}_output_node_{i}.bin"
-        
-        try:
-            # 读取C++输出
-            cpp_data = np.fromfile(cpp_filename, dtype=np.float32)
-            py_flat = py_output.flatten()
-            
-            print(f"\n比对输出节点 {i}:")
-            print(f"C++形状: {cpp_data.shape}, Python形状: {py_output.shape}")
-            print(f"C++范围: [{cpp_data.min():.6f}, {cpp_data.max():.6f}]")
-            print(f"Python范围: [{py_output.min():.6f}, {py_output.max():.6f}]")
-            
-            if cpp_data.size != py_flat.size:
-                print("错误: 输出张量尺寸不匹配!")
-                results[i] = False
-                continue
-                
-            # 逐元素比对
-            max_diff = 0
-            diff_count = 0
-            for j in range(cpp_data.size):
-                diff = abs(cpp_data[j] - py_flat[j])
-                if diff > tolerance:
-                    diff_count += 1
-                    max_diff = max(max_diff, diff)
-                    
-            if diff_count > 0:
-                print(f"发现 {diff_count} 个差异点，最大差异: {max_diff:.6f}")
-                results[i] = False
-            else:
-                print("输出张量完全一致!")
-                results[i] = True
-                
-        except Exception as e:
-            print(f"比对输出节点 {i} 时出错: {e}")
-            results[i] = False
-            
-    return results
-
-
-def debug_tensor_comparison(cpp_tensor, python_tensor):
-    """详细对比两个张量的差异"""
-    cpp_flat = cpp_tensor.flatten()
-    python_flat = python_tensor.flatten()
-    
-    print("=== 详细张量对比 ===")
-    print(f"CPP张量形状: {cpp_tensor.shape}")
-    print(f"Python张量形状: {python_tensor.shape}")
-    print(f"CPP范围: [{cpp_flat.min():.6f}, {cpp_flat.max():.6f}]")
-    print(f"Python范围: [{python_flat.min():.6f}, {python_flat.max():.6f}]")
-    
-    # 检查前10个像素的差异
-    print("前10个像素对比:")
-    for i in range(min(10, len(cpp_flat))):
-        diff = abs(cpp_flat[i] - python_flat[i])
-        print(f"像素{i}: C++={cpp_flat[i]:.6f}, Python={python_flat[i]:.6f}, 差异={diff:.6f}")
-
-
-def main():
-    """主函数 - 对比三个模型在Python和C++中的结果"""
-    # 图像路径
-    # image_path = "./new_labeled_data_2331/train/images/output_s001_iso189_480360.bmp"
-    image_path = "./new_labeled_data_2331/train/images/output_s001_iso189_480360.bmp"
-    if not Path(image_path).exists():
-        print(f"错误：图像文件不存在: {image_path}")
+def save_results_with_overlay(original_image_path, segmentation, original_size, target_size, model_type, output_path, alpha=0.5):
+    """保存带有绿色透明掩膜的结果图像"""
+    # 重新读取原始图像（确保是BGR格式用于显示）
+    original_image = cv2.imread(original_image_path)
+    if original_image is None:
+        print(f"无法读取原始图像: {original_image_path}")
         return
     
-    # 模型路径
+    # 创建绿色透明掩膜
+    overlay_result = create_green_overlay(original_image, segmentation, original_size, target_size, model_type, alpha)
+    
+    # 保存结果
+    cv2.imwrite(output_path, overlay_result)
+    print(f"绿色掩膜覆盖图已保存: {output_path}")
+
+def main():
+    """主函数 - 配置参数和运行三个模型"""
+    # ========== 配置参数 ==========
+    # 图像路径
+    image_path = "./input/test/indoor.png"
+    
+    # 输出目录
+    output_dir = "./output/onnx"
+    
+    # 目标尺寸 (高度, 宽度)
+    target_size = (360, 480)
+    
+    # 绿色掩膜透明度 (0-1之间，越大越不透明)
+    overlay_alpha = 0.5
+    
+    # 是否保存调试图像
+    save_debug_images = True
+    
+    # 模型配置
     model_configs = [
         {
             "path": "./output/models/enet_model_opset11.onnx",
             "type": "multi_class", 
-            "name": "多标签库"
+            "name": "多标签库",
+            "enabled": True
         },
         {
-            "path": "./output/models/enet_green_ratio_full_static_opset11_new_data.onnx", 
+            "path": "./output/models/enet_green_ratio_full_static_opset11_officeGreenAndOriInput.onnx", 
             "type": "full",
-            "name": "新训练full库"
+            "name": "新训练full库",
+            "enabled": True
         },
         {
-            "path": "./output/models/enet_green_ratio_encoder_static_opset11_new_data.onnx",
+            "path": "./output/models/enet_green_ratio_encoder_static_opset11_officeGreenAndOriInput.onnx",
             "type": "encoder", 
-            "name": "新训练encoder库"
+            "name": "新训练encoder库",
+            "enabled": True
         }
     ]
+    # ========== 配置结束 ==========
+    
+    # 检查图像文件是否存在
+    if not Path(image_path).exists():
+        print(f"错误：图像文件不存在: {image_path}")
+        return
+    
+    # 创建输出目录
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
     
     # 预处理图像
     print("预处理图像...")
-    input_tensor, original_size = preprocess_image_for_onnx(image_path)
+    debug_save_path = f"{output_dir}/input_tensor.bmp" if save_debug_images else None
+    input_tensor, original_size = preprocess_image_for_onnx(
+        image_path, 
+        target_size=target_size,
+        debug_save_path=debug_save_path
+    )
     print(f"输入张量形状: {input_tensor.shape}")
     print(f"原始图像尺寸: {original_size}")
-
-    python_stats = save_tensor_debug(input_tensor, "./output/onnx/debug", "python")
-    input_match = compare_input_tensors("./output/onnx/cpp_actual_input_tensor.bin", input_tensor)
-
 
     # 存储结果
     python_results = {}
     
     # 测试每个模型
     for config in model_configs:
+        if not config["enabled"]:
+            continue
+            
         print(f"\n{'='*60}")
         print(f"测试 {config['name']} ({config['type']})")
         print(f"{'='*60}")
@@ -398,140 +271,47 @@ def main():
         if results is not None:
             python_results[config['type']] = results
             
-            # 保存分割结果可视化
+            # 保存带有绿色掩膜的结果
             if 'segmentation' in results:
-                viz_filename = f"./output/onnx/python_{config['type']}_vegetation_mask.bmp"
-                save_segmentation_visualization(
+                overlay_filename = f"{output_dir}/{config['type']}_green_overlay.bmp"
+                save_results_with_overlay(
+                    image_path,
                     results['segmentation'], 
                     original_size, 
-                    viz_filename, 
-                    config['type']
+                    target_size,
+                    config['type'],
+                    overlay_filename,
+                    alpha=overlay_alpha
                 )
     
-    # 打印Python结果
+    # 打印结果
     print(f"\n{'='*60}")
-    print("Python ONNX推理结果")
+    print("模型推理结果")
     print(f"{'='*60}")
     
-    multi_class_result = python_results.get('multi_class', {})
-    full_result = python_results.get('full', {})
-    encoder_result = python_results.get('encoder', {})
+    for config in model_configs:
+        if not config["enabled"]:
+            continue
+            
+        model_type = config["type"]
+        results = python_results.get(model_type, {})
+        
+        if model_type == "multi_class" and 'vegetation_ratio' in results:
+            ratio = results['vegetation_ratio'] * 100
+            print(f"{config['name']}植被比例: {ratio:.5f}%")
+        
+        elif model_type == "full":
+            if 'vegetation_ratio_segmentation' in results:
+                seg_ratio = results['vegetation_ratio_segmentation'] * 100
+                direct_ratio = results.get('vegetation_ratio_direct', 0) * 100
+                print(f"{config['name']}植被比例（分割统计）: {seg_ratio:.5f}%")
+                print(f"{config['name']}植被比例（直接输出）: {direct_ratio:.5f}%")
+        
+        elif model_type == "encoder" and 'vegetation_ratio' in results:
+            ratio = results['vegetation_ratio'] * 100
+            print(f"{config['name']}植被比例: {ratio:.5f}%")
     
-    # 多标签库结果
-    if 'vegetation_ratio' in multi_class_result:
-        multi_ratio = multi_class_result['vegetation_ratio'] * 100
-        print(f"多标签库植被比例: {multi_ratio:.5f}%")
-    
-    # 新训练full库结果
-    if 'vegetation_ratio_segmentation' in full_result:
-        full_seg_ratio = full_result['vegetation_ratio_segmentation'] * 100
-        full_direct_ratio = full_result.get('vegetation_ratio_direct', 0) * 100
-        print(f"新训练full库植被比例（分割统计）: {full_seg_ratio:.5f}%")
-        print(f"新训练full库植被比例（直接输出）: {full_direct_ratio:.5f}%")
-    
-    # 新训练encoder库结果
-    if 'vegetation_ratio' in encoder_result:
-        encoder_ratio = encoder_result['vegetation_ratio'] * 100
-        print(f"新训练encoder库植被比例: {encoder_ratio:.5f}%")
-    
-    # 与C++结果对比
-    print(f"\n{'='*60}")
-    print("Python vs C++ 结果对比")
-    print(f"{'='*60}")
-    
-    # C++结果（从您提供的数据）
-    cpp_results = {
-        'multi_class': 6.59336,      # 多标签库植被比例
-        'full_segmentation': 4.23438,  # full库分割统计
-        'full_direct': 4.55093,       # full库直接输出
-        'encoder': 4.55093           # encoder库直接输出
-    }
-    
-    # 对比分析
-    if 'multi_class' in python_results and 'full' in python_results:
-        python_multi = multi_class_result['vegetation_ratio'] * 100
-        python_full_seg = full_result['vegetation_ratio_segmentation'] * 100
-        python_full_direct = full_result.get('vegetation_ratio_direct', 0) * 100
-        
-        print("1. 植被覆盖对比（多标签库 vs 新训练full库）:")
-        print(f"   - Python多标签库植被比例: {python_multi:.5f}%")
-        print(f"   - Python新训练full库植被比例（分割统计）: {python_full_seg:.5f}%")
-        print(f"   - Python新训练full库植被比例（直接输出）: {python_full_direct:.5f}%")
-        print(f"   - C++多标签库植被比例: {cpp_results['multi_class']:.5f}%")
-        print(f"   - C++新训练full库植被比例（分割统计）: {cpp_results['full_segmentation']:.5f}%")
-        print(f"   - C++新训练full库植被比例（直接输出）: {cpp_results['full_direct']:.5f}%")
-        
-        # 计算差异
-        diff_seg = abs(python_multi - python_full_seg)
-        diff_direct = abs(python_multi - python_full_direct)
-        internal_diff = abs(python_full_seg - python_full_direct)
-        
-        print(f"   - Python差异（分割统计）: {diff_seg:.5f}%")
-        print(f"   - Python差异（直接输出）: {diff_direct:.5f}%")
-        print(f"   - Python Full库内部一致性差异: {internal_diff:.5f}%")
-        
-        # 与C++的差异
-        cpp_diff_seg = abs(cpp_results['multi_class'] - cpp_results['full_segmentation'])
-        cpp_diff_direct = abs(cpp_results['multi_class'] - cpp_results['full_direct'])
-        cpp_internal_diff = abs(cpp_results['full_segmentation'] - cpp_results['full_direct'])
-        
-        print(f"   - C++差异（分割统计）: {cpp_diff_seg:.5f}%")
-        print(f"   - C++差异（直接输出）: {cpp_diff_direct:.5f}%")
-        print(f"   - C++ Full库内部一致性差异: {cpp_internal_diff:.5f}%")
-    
-    if 'multi_class' in python_results and 'encoder' in python_results:
-        python_multi = multi_class_result['vegetation_ratio'] * 100
-        python_encoder = encoder_result['vegetation_ratio'] * 100
-        
-        print("2. 植被比例对比（多标签库 vs 新训练encoder库）:")
-        print(f"   - Python多标签库植被比例: {python_multi:.5f}%")
-        print(f"   - Python新训练encoder库植被比例: {python_encoder:.5f}%")
-        print(f"   - Python差异: {abs(python_multi - python_encoder):.5f}%")
-        print(f"   - C++多标签库植被比例: {cpp_results['multi_class']:.5f}%")
-        print(f"   - C++新训练encoder库植被比例: {cpp_results['encoder']:.5f}%")
-        print(f"   - C++差异: {abs(cpp_results['multi_class'] - cpp_results['encoder']):.5f}%")
-    
-    if 'full' in python_results and 'encoder' in python_results:
-        python_full_direct = full_result.get('vegetation_ratio_direct', 0) * 100
-        python_encoder = encoder_result['vegetation_ratio'] * 100
-        
-        print("3. 直接输出对比（新训练full库 vs 新训练encoder库）:")
-        print(f"   - Python新训练full库直接输出比例: {python_full_direct:.5f}%")
-        print(f"   - Python新训练encoder库直接输出比例: {python_encoder:.5f}%")
-        print(f"   - Python差异: {abs(python_full_direct - python_encoder):.5f}%")
-        print(f"   - C++新训练full库直接输出比例: {cpp_results['full_direct']:.5f}%")
-        print(f"   - C++新训练encoder库直接输出比例: {cpp_results['encoder']:.5f}%")
-        print(f"   - C++差异: {abs(cpp_results['full_direct'] - cpp_results['encoder']):.5f}%")
-    
-    # 保存详细对比报告
-    with open("./output/onnx/python_cpp_comparison_report.txt", "w") as f:
-        f.write("Python vs C++ ONNX模型对比报告\n")
-        f.write("=" * 50 + "\n\n")
-        
-        f.write("Python结果:\n")
-        for model_type, results in python_results.items():
-            f.write(f"{model_type}: ")
-            for key, value in results.items():
-                if 'ratio' in key:
-                    f.write(f"{key}: {value*100:.5f}% ")
-            f.write("\n")
-        
-        f.write("\nC++结果:\n")
-        f.write(f"多标签库: {cpp_results['multi_class']:.5f}%\n")
-        f.write(f"Full库分割统计: {cpp_results['full_segmentation']:.5f}%\n")
-        f.write(f"Full库直接输出: {cpp_results['full_direct']:.5f}%\n")
-        f.write(f"Encoder库: {cpp_results['encoder']:.5f}%\n")
-        
-        f.write("\n差异分析:\n")
-        if 'multi_class' in python_results and 'full' in python_results:
-            python_multi = multi_class_result['vegetation_ratio'] * 100
-            python_full_seg = full_result['vegetation_ratio_segmentation'] * 100
-            diff = abs(python_multi - cpp_results['multi_class'])
-            f.write(f"多标签库差异: {diff:.5f}%\n")
-            diff = abs(python_full_seg - cpp_results['full_segmentation'])
-            f.write(f"Full库分割统计差异: {diff:.5f}%\n")
+    print(f"\n所有结果图像已保存到: {output_dir}")
 
 if __name__ == "__main__":
-    # 创建输出目录
-    Path("./output/onnx").mkdir(exist_ok=True)
     main()

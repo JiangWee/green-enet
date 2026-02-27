@@ -355,10 +355,10 @@ def main():
     safe_print("=" * 50)
     
     # 在这里集中配置所有路径
-    encoder_model_path = './output/models/enet_green_ratio_encoder_simplifiedInit.pth'
-    full_model_path = './output/models/enet_green_ratio_full_simplifiedInit.pth'
+    encoder_model_path = './output/models/enet_green_ratio_encoder_officeGreenAndOriInput.pth'
+    full_model_path = './output/models/enet_green_ratio_full_officeGreenAndOriInput.pth'
     output_dir = './output/models'
-    suffix = 'simplifiedInit'
+    suffix = 'officeGreenAndOriInput'
 
     # 验证路径是否存在
     safe_print("[信息] 配置检查:")
